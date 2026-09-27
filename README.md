@@ -184,10 +184,17 @@ cd backend
 ## 前端（Expo 通用应用，Web / Android / iOS 同源）
 
 ```bash
-cd frontend
-npm install
+# ---- 主目录快捷指令（根 package.json，代理 frontend/backend）----
+npm run web             # Web 开发预览
+npm run build           # 类型检查 + Web 编译导出到 frontend/dist/
+npm run build:win       # Windows 桌面应用打包（产出 frontend/desktop/release/*.exe）
+npm run desktop         # 运行 Windows 桌面窗口（开发）
+npm run run:android     # Android 生产构建
+npm run backend:build   # 后端编译（gradlew build -x test）
+npm run backend:run     # 后端运行（gradlew bootRun）
 
-# ---- npm 脚本（package.json scripts）----
+# ---- frontend/ 内的完整脚本 ----
+cd frontend && npm install
 npm run web             # Web 开发预览（API 走 http://localhost:8080）
 npm run build           # 类型检查 + Web 编译导出到 dist/
 npm run preview         # 本地预览 dist/（http://localhost:5173）

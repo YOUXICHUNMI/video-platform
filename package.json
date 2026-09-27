@@ -1,0 +1,24 @@
+{
+  "name": "video-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "视频平台 —— 主目录快捷脚本：无需 cd frontend，直接执行前端指令（同时附带后端快捷命令）",
+  "scripts": {
+    "web": "npm --prefix frontend run web",
+    "start": "npm --prefix frontend run start",
+    "android": "npm --prefix frontend run android",
+    "ios": "npm --prefix frontend run ios",
+    "typecheck": "npm --prefix frontend run typecheck",
+    "build": "npm --prefix frontend run build",
+    "build:web": "npm --prefix frontend run build:web",
+    "build:android": "npm --prefix frontend run build:android",
+    "build:ios": "npm --prefix frontend run build:ios",
+    "run:android": "npm --prefix frontend run run:android",
+    "run:ios": "npm --prefix frontend run run:ios",
+    "preview": "npm --prefix frontend run preview",
+    "desktop": "npm --prefix frontend run desktop",
+    "build:win": "npm --prefix frontend run build:win",
+    "backend:build": "cd backend && gradlew.bat build -x test",
+    "backend:run": "cd backend && gradlew.bat bootRun"
+  }
+}
