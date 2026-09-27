@@ -33,13 +33,17 @@
 | 🧩 图形验证码 | 登录/注册均需验证码；默认内存存储，`platform.redis.enabled: true` 时切 Redis |
 | 👑 会员(VIP)体系 | 用户角色 `ADMIN/USER`、`vipExpireAt` 到期时间；视频可标记 `vipOnly`，非会员访问播放页返回 4007 门槛页并引导开通 |
 | 💳 VIP 充值页 | 月度 ¥18 / 季度 ¥45 / 年度 ¥148 三档套餐，当前为**模拟支付**（调用 `POST /api/users/me/vip` +1 个月），支付渠道预留 |
-| 💬 评论系统 | 视频下方评论/删除；点击用户名弹出资料卡（用户名、VIP 徽章、VIP 渐变用户名、加入时间），可从资料卡直达私聊 |
+| 💬 评论系统 | 视频下方评论/删除；**支持 emoji 表情与 GIF/PNG 配图**（点 😀 选表情、🖼️ 选 png/gif/jpg/webp ≤10MB，GIF 动图自动播放）；点击用户名弹出资料卡（用户名、VIP 徽章、VIP 渐变用户名、加入时间），可从资料卡直达私聊 |
 | 📝 动态广场 | 所有人可浏览，登录后发布/删除自己的动态，管理员可删任意动态 |
-| 💗 私聊 | 左侧会话列表 + 右侧聊天窗口，3 秒轮询新消息，未读角标，支持 `?to=userId` 直达 |
+| 💗 私聊 | 会话列表 + 聊天窗口，3 秒轮询新消息，未读角标，支持 `?to=userId` 直达；**本地保存**——会话与消息持久化，秒开且离线可看历史 |
 | ⭐ 收藏夹 | 收藏/取消收藏；**视频被删除后仍保留记录**，显示"视频已失效"卡片 |
+| 💾 视频缓存与下载 | "⤓ 缓存"把视频存到应用缓存目录（重进秒开省流量，可一键清除）；"⬇ 下载"为**会员专享**（管理员/上传者/有效会员），原生拉起系统分享保存、Web 触发浏览器下载，后端强制鉴权 |
 | ⏱️ 观看进度记忆 | 每 5 秒上报进度，退出后再次进入自动恢复到上次位置（提示"已恢复到上次观看位置"） |
 | 🌗 深色/亮色主题 | Navbar 右上角 🌙/☀️ 切换，跟随 `localStorage` 持久化 |
 | 📹 本地播放/m3u8 | 播放页可"播放本地视频"（File 对象直读）或粘贴 m3u8/mp4 地址导入播放 |
+| 🌐 后端地址设置 | 登录页右上角**不明显的网络标志 🌐**，点击可查看/修改/重置后端地址（AsyncStorage 持久化，改后立即生效） |
+| 📷 扫码登录 | 登录页切换到"扫码登录"出二维码；已登录的移动端在顶栏"📷 扫一扫"扫码并确认后，网页端 2 秒内自动免密登录（二维码 5 分钟过期，支持已扫码/取消/过期状态提示） |
+| 📶 流量下载提醒 | 安卓端"缓存/下载"视频前检测网络类型，蜂窝网络时弹窗提醒（取消/继续），WiFi 不打扰 |
 | 📊 日志 | 控制台 + 文件 `./logs/video-platform.log` 双输出，登录手机号脱敏打印 |
 
 ---
@@ -132,13 +136,19 @@ cd backend
 | POST | `/api/auth/login/phone` | **手机号登录**（主入口，需验证码） | 公开 |
 | POST | `/api/auth/login` | 用户名登录（旧入口，后端保留） | 公开 |
 | POST | `/api/auth/refresh` | 刷新 access token | refresh token |
+| POST | `/api/auth/qr/create` | **扫码登录**：创建二维码会话（5 分钟有效） | 公开 |
+| GET | `/api/auth/qr/status` | 扫码登录轮询：WAITING/SCANNED/CONFIRMED/EXPIRED/CANCELED，CONFIRMED 返回 token | 公开 |
+| POST | `/api/auth/qr/scan` | 移动端标记"已扫码" | JWT |
+| POST | `/api/auth/qr/confirm` | 移动端确认登录（网页端随即拿到 token） | JWT |
+| POST | `/api/auth/qr/cancel` | 移动端取消确认 | JWT |
 
 **视频**
 | 方法 | 路径 | 说明 | 鉴权 |
 |---|---|---|---|
 | GET | `/api/videos/list` | 分页视频列表 | 公开 |
 | GET | `/api/videos/{id}` | 视频详情（vipOnly 时校验会员） | 公开/会员 |
-| GET | `/api/videos/{id}/stream` | HTTP Range 流式播放（vipOnly 校验） | 公开/会员 |
+| GET | `/api/videos/{id}/stream` | HTTP Range 流式播放（vipOnly 校验；支持 `?token=` 供播放器传递 JWT） | 公开/会员 |
+| GET | `/api/videos/{id}/download` | **会员专享下载**（管理员/上传者/有效会员），Content-Disposition 附件 | JWT(会员) |
 | POST | `/api/videos/upload/init` | 初始化分片上传 | JWT |
 | POST | `/api/videos/upload/{taskId}/{index}` | 上传分片 | JWT |
 | POST | `/api/videos/upload/{taskId}/complete` | 合并入库（`vipOnly` 参数标记会员视频） | JWT |
@@ -147,7 +157,7 @@ cd backend
 **互动（评论/收藏/进度/动态/私聊）**
 | 方法 | 路径 | 说明 | 鉴权 |
 |---|---|---|---|
-| GET / POST | `/api/videos/{videoId}/comments` | 评论列表 / 发表评论 | 公开 / JWT |
+| GET / POST | `/api/videos/{videoId}/comments` | 评论列表 / 发表评论（multipart：文字+可选图片 png/gif/jpg/webp ≤10MB） | 公开 / JWT |
 | DELETE | `/api/comments/{id}` | 删除评论 | JWT(作者/管理员) |
 | POST / GET | `/api/videos/{id}/favorite` | 收藏切换 / 是否已收藏 | JWT |
 | GET | `/api/users/me/favorites` | 我的收藏（含已删除视频"失效"记录） | JWT |
@@ -177,17 +187,27 @@ cd backend
 cd frontend
 npm install
 
-# ---- Web ----
-npx expo start --web         # 开发预览（浏览器访问，API 走 http://localhost:8080）
-npx expo export --platform web   # 产出 dist/ 静态站，可挂 Nginx 或任意静态服务器
+# ---- npm 脚本（package.json scripts）----
+npm run web             # Web 开发预览（API 走 http://localhost:8080）
+npm run build           # 类型检查 + Web 编译导出到 dist/
+npm run preview         # 本地预览 dist/（http://localhost:5173）
+npm run typecheck       # 仅 TypeScript 类型检查
 
-# ---- Android / iOS ----
-npx expo start               # 开发（可用 Expo Go 体验）
-npx expo run:android         # Android 生产构建（需 Android SDK）
-npx expo run:ios             # iOS 生产构建（需 macOS + Xcode）
+npm run android         # Android 开发（Expo Go 可体验）
+npm run ios             # iOS 开发
+npm run run:android     # Android 生产构建（需 Android SDK）
+npm run run:ios         # iOS 生产构建（需 macOS + Xcode）
+npm run build:android   # Android JS Bundle 导出
+npm run build:ios       # iOS JS Bundle 导出
+
+# ---- Windows 桌面应用（Electron 壳）----
+npm run desktop         # 开发运行：编译 Web 产物后打开桌面窗口
+npm run build:win       # 编译 Web + Electron 打包，产出 desktop/release/*.exe（安装版 + 便携版）
 ```
 
-- API 地址在 `frontend/src/config.ts`：Web 用 `http://localhost:8080`；Android 模拟器用 `http://10.0.2.2:8080`；真机改成电脑局域网 IP。
+- API 地址在 `frontend/src/config.ts`：Web 用 `http://localhost:8080`；Android 模拟器用 `http://10.0.2.2:8080`；真机改成电脑局域网 IP（也可在登录页右上角 🌐 里改，立即生效无需重启）。
+- **安卓下拉通知栏媒体控制**：播放视频时，下拉通知栏/锁屏界面会出现 Now Playing 卡片——显示视频标题/封面，支持播放/暂停、**拖动进度条快进快退**，应用切到后台也能继续播（`expo-video` 原生 MediaSession，`app.json` 已开 `supportsBackgroundPlayback`）。⚠️ 需重新构建原生包（`npm run run:android`）后生效，Expo Go 中不可用。
+- **Windows 桌面端**：`desktop/` 为 Electron 壳，复用 Web 编译产物（`dist/`）——主进程内置仅监听 127.0.0.1 的随机端口静态服务器 + SPA 回退，窗口加载页面；功能与 Web 版一致（含扫码登录/流量提醒等 Web 可用能力，安卓专属能力如相机扫码不适用）。`npm run build:win` 一键产出 NSIS 安装包与便携版 exe（位于 `desktop/release/`）。
 - 功能与旧 Web 版完全对齐：手机号登录（用户名入口隐藏保留）、注册（手机+邮箱+验证码）、首页 VIP 徽章、播放页（VIP 门槛/收藏/评论/资料卡/进度记忆/本地播放/m3u8 导入）、上传（vipOnly 勾选）、收藏夹（失效视频卡）、动态、私聊（轮询+未读角标）、VIP 三档充值页、深色/亮色主题切换（顶栏 🌙/☀️）。
 
 ---
