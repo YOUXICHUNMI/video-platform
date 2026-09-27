@@ -44,6 +44,12 @@
 | 🌐 后端地址设置 | 登录页右上角**不明显的网络标志 🌐**，点击可查看/修改/重置后端地址（AsyncStorage 持久化，改后立即生效） |
 | 📷 扫码登录 | 登录页切换到"扫码登录"出二维码；已登录的移动端在顶栏"📷 扫一扫"扫码并确认后，网页端 2 秒内自动免密登录（二维码 5 分钟过期，支持已扫码/取消/过期状态提示） |
 | 📶 流量下载提醒 | 安卓端"缓存/下载"视频前检测网络类型，蜂窝网络时弹窗提醒（取消/继续），WiFi 不打扰 |
+| 👤 我的页面 | 顶栏"我的"进入：用户卡片 + **关于作者**（前后端完整技术栈清单） |
+| 🥚 工具箱彩蛋 | 关于作者第一项 **AuthorTools** 单击无反应，**2 秒内点 3 下**进入工具箱（工具网格） |
+| 🔐 OTP 密码管理器 | 工具箱内置：本地 TOTP 动态验证码（RFC 6238），**手动添加或扫码添加**（otpauth:// 二维码），**点击整行复制**，长按删除；密钥仅存本机 AsyncStorage |
+| 📺 直播（工具箱入口） | 我的直播间：创建直播间复制 OBS 推流信息、开播/结束/删除；全部直播：观看 HLS 直播流 + 在线人数心跳 |
+| 📱 我的设备（工具箱入口） | **原生端**：设备型号/系统/内存/开机时长、电池状态、**亮度滑块直接调节**、网络类型，一键跳转系统设置面板控制 WiFi/蓝牙/飞行模式；**Web 端**：CPU 核心/内存/屏幕/GPU（WebGL）/电池/网络质量/站点存储/媒体设备统计，桌面 Chrome/Edge 还支持 **Web Serial 串口管理**（读取 VID/PID）与 **Web Bluetooth 蓝牙扫描** |
+| 🔑 特权权限（我的设备·Android） | **权限检测**：列出本应用声明的全部权限与授予状态；**Root**：检测 su 可用性，Root 身份执行任意 shell 命令；**Shizuku**：检测安装/服务运行/授权状态，应用内弹出授权，以 shell（ADB）权限执行命令（本地 Expo 原生模块 `modules/root-shizuku`，集成 dev.rikka.shizuku:api 13.1.5；需重新构建原生包生效） |
 | 📊 日志 | 控制台 + 文件 `./logs/video-platform.log` 双输出，登录手机号脱敏打印 |
 
 ---
@@ -141,6 +147,20 @@ cd backend
 | POST | `/api/auth/qr/scan` | 移动端标记"已扫码" | JWT |
 | POST | `/api/auth/qr/confirm` | 移动端确认登录（网页端随即拿到 token） | JWT |
 | POST | `/api/auth/qr/cancel` | 移动端取消确认 | JWT |
+
+**直播（OBS 推流 → SRS/nginx-rtmp → HLS 播放）**
+| 方法 | 路径 | 说明 | 鉴权 |
+|---|---|---|---|
+| POST | `/api/live` | 创建直播间（标题），返回 `streamKey` 与 OBS 推流地址 | JWT |
+| GET | `/api/live/list` | 直播间列表（LIVE 优先，分页，含在线人数） | 公开 |
+| GET | `/api/live/{id}` | 直播间详情（含 `hlsUrl` 播放地址；streamKey 仅主播可见） | 公开 |
+| GET | `/api/live/me` | 我的直播间 | JWT |
+| POST | `/api/live/{id}/start` `/stop` | 手动开播 / 结束（媒体服务器回调缺失时兜底） | JWT(主播) |
+| DELETE | `/api/live/{id}` | 删除直播间 | JWT(主播) |
+| POST | `/api/live/{id}/view` | 观众心跳（15 秒一次，30 秒窗口统计在线数） | 公开 |
+| POST | `/api/live/callback/publish` `/unpublish` | 媒体服务器推流回调（`?secret=`，body `{"stream":"<streamKey>"}`），自动更新状态 | 回调密钥 |
+
+> 直播音视频流由外部媒体服务器承载（本项目不做 RTMP 协议）：OBS 服务器填 `platform.live.rtmp-url`（如 `rtmp://ip:1935/live`），串流密钥填创建直播间返回的 `streamKey`；SRS/nginx-rtmp 开启 HLS 输出并把 HTTP 地址配到 `platform.live.hls-base-url`，建议把 `on_publish`/`on_unpublish` 回调指向后端以自动同步开播状态。
 
 **视频**
 | 方法 | 路径 | 说明 | 鉴权 |
