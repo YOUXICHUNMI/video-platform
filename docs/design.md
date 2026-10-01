@@ -9,14 +9,14 @@ A front/back-separated video hosting & playback platform (B站风格), built fro
 - **Auth**: JWT (access + refresh), BCrypt password hashing (per-user salt / 盐加密), image captcha login & register.
 - **Video**: chunked/resumable 4K upload, HTTP Range streaming for direct 4K playback, optional ffmpeg → HLS adaptive transcode.
 - **Storage**: pluggable `StorageService` — LocalDisk or MinIO (S3-compatible), toggled by config.
-- **Ops**: unified `R<T>` response, global exception handler, configurable log level via `config/application.yml`.
+- **Ops**: unified `R<T>` response, global exception handler, configurable log level via `data/config/application.yml`.
 
 ## 2. Architecture
 
 ```
 video-platform/
 ├── backend/                Spring Boot app (Gradle)
-│   ├── config/application.yml     ← single unified external config file
+│   ├── data/config/application.yml     ← single unified external config file
 │   └── src/main/java/com/videoplatform/
 │       ├── VideoPlatformApplication.java
 │       ├── common/                R<T>, ResultCode, BusinessException, GlobalExceptionHandler
@@ -33,7 +33,7 @@ video-platform/
 
 ## 3. Backend Design
 
-### 3.1 Config (`config/application.yml`)
+### 3.1 Config (`data/config/application.yml`)
 
 A single external YAML that holds **everything**: db, storage, jwt, logging, video/ffmpeg.
 
@@ -92,7 +92,7 @@ SQLite uses `INTEGER PRIMARY KEY AUTOINCREMENT`; MySQL uses `BIGINT AUTO_INCREME
 
 ## 6. Build & Run
 
-- Backend: `cd backend && ./gradlew bootRun` (config at `backend/config/application.yml`).
+- Backend: `cd backend && ./gradlew bootRun` (config at `backend/data/config/application.yml`).
 - Frontend: `cd frontend && npm install && npm run dev` (dev server `:5173`, proxies `/api` to `:8080`).
 - Default login: a seed user is created on startup (`admin` / `admin123`) when `platform.seed.enabled=true` (for dev convenience).
 

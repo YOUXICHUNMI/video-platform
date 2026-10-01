@@ -59,7 +59,10 @@
 ```
 video-platform/
 ├── backend/                  # Spring Boot 后端 (Gradle)
-│   ├── config/application.yml     ← 唯一的统一配置文件
+│   ├── data/                       # 运行时数据目录（不纳入版本控制）
+│   │   ├── config/application.yml      ← 唯一的统一配置文件，改这里
+│   │   ├── video_platform.db           ← SQLite 库
+│   │   └── videos/                     ← 上传的视频文件
 │   └── src/main/java/com/videoplatform/
 │       ├── common/                 R<T> · ResultCode · 异常 · 全局异常处理器
 │       ├── config/                 MyBatis-Plus · CORS · 安全 · 静态资源 · 建表与迁移
@@ -107,7 +110,7 @@ cd backend
 ```
 
 ### 唯一配置文件
-所有配置都在 **`backend/config/application.yml`**：数据库、可选组件、存储、JWT、日志、视频/HLS、种子用户。
+所有配置都在 **`backend/data/config/application.yml`**：数据库、可选组件、存储、JWT、日志、视频/HLS、种子用户。
 
 ### 数据库：SQLite(默认) / MySQL 可选
 
@@ -130,7 +133,120 @@ cd backend
 - `minio` / `rustfs`：S3 兼容对象存储，配置对应 endpoint/ak/sk/bucket/public-url。
 
 ### 日志
-在 `config/application.yml` 的 `logging.level.*` 修改级别；日志输出到控制台与文件 `./logs/video-platform.log`。敏感信息（手机号）打印时脱敏为 `138****8000`。
+在 `data/config/application.yml` 的 `logging.level.*` 修改级别；日志输出到控制台与文件 `./logs/video-platform.log`。敏感信息（手机号）打印时脱敏为 `138****8000`。
+
+### 系统助理 Angela（私聊机器人 + Actuator 运维指令）
+
+私聊列表里有一个系统账号 **Angela**：用户名保留（注册/改名都抢不到）、密码是随机 UUID 的哈希
+（谁都登不上这个号）、不能封禁/删除，只由后端发言（在线时定时播报早安/午安/晚安）。
+
+**管理员**与**管理用户**可以给她发指令，普通用户只会收到一条权限提示：
+
+| 指令 | 作用 |
+|---|---|
+| `/status` | 后端运行状态（运行时长 / JVM / 数据库计数 / 网关在线连接 / **邮件** / AI 状态） |
+| `/time` | 服务器时间与 Unix 时间戳 |
+| `/actuator/<端点>` | **访问后端 Actuator 端点取回数据**，如 `/actuator/health`、`/actuator/metrics/jvm.memory.used` |
+| `/actuator` | 列出允许访问的端点 |
+| `/mail` | **立即检查一次收件箱**（不等定时轮询）；有新邮件会通知管理员 |
+| `/mail/send 收件人 \| 主题 \| 正文` | 用平台邮箱发一封信（**仅管理员**） |
+| `/help` | 指令列表 |
+| 其他内容 | 转给 AI 对话（`platform.ai.api-key` 留空时回复"未填写AI key 无法作答"） |
+
+**Actuator 配置要点**（`data/config/application.yml`）：
+
+- 依赖 `spring-boot-starter-actuator`，默认只暴露 `health,info,metrics,loggers`；
+- 绑在**独立管理端口** `management.server.port`（默认 8095）且 `management.server.address: 127.0.0.1`，
+  只监听回环地址，局域网/公网扫不到；
+- 应用层再加一道：`/actuator/**` 只允许来自 127.0.0.1 / ::1 的请求（`SecurityConfig`），
+  即使有人把管理端口改回 `server.port` 也不会被外部访问；
+- Angela 侧还有**端点白名单** `platform.chat.angela.actuator.allowed-endpoints`：`env`/`configprops`
+  这类会把 `platform.jwt.secret`、`platform.ai.api-key` 明文吐出来的端点默认不允许她读
+  （她读到的内容会作为私聊消息落进数据库）。需要时同时加进 `management.endpoints.web.exposure.include`
+  与 `allowed-endpoints`，并自行承担风险（回包只对 `secret/password/key/token` 字段做脱敏兜底）。
+
+运维自己取数（仅本机）：
+
+```bash
+curl http://127.0.0.1:8095/actuator/health
+curl http://127.0.0.1:8095/actuator/metrics/jvm.memory.used
+```
+
+### 邮箱（发信 / 收信 + 新邮件通知）
+
+一个邮箱账号既能**发信**（SMTP）也能**收信**（POP3 / IMAP 轮询），全部参数集中在
+`data/config/application.yml` 的 `platform.mail.*`，默认 `enabled: false`——没配就整块静默跳过，
+不会因为连不上邮件服务器而刷日志或影响启动。
+
+```yaml
+platform:
+  mail:
+    enabled: true
+    smtp:      { host: smtp.qq.com,  username: me@qq.com,  password: "<SMTP 授权码>", ssl: true }
+    receive:   { enabled: true, protocol: imap, host: imap.qq.com, username: me@qq.com,
+                 password: "<IMAP 授权码>", poll-seconds: 120 }
+    notify:    { enabled: true, title: "检测到新邮件", to-username: "" }   # 空 = 自动取 id 最小的管理员
+```
+
+**收信 → 通知链路**：`MailReceiver` 定时轮询（默认 120 秒）收件箱，把 HTML/多部分邮件抽成纯文本，
+交给 `MailNotifier` **以 Angela 的身份私聊发给「管理员」一位**，格式是首行固定一句
+「检测到新邮件」，其后是邮件原文：
+
+```
+检测到新邮件
+来自：张三 <a@b.com>
+主题：周报
+时间：2026-10-01 09:30:00
+──────────
+<邮件正文，超长自动截断>
+```
+
+要点与坑：
+
+- **只发给一位管理员**：默认 id 最小的管理员，可用 `notify.to-username` 指定；消息会落库，
+  管理员离线也能在会话列表看到未读（和定时问候、`/status` 回复完全一条链路）；
+- **去重**：优先 `Message-ID`，没有再用 UID / 序号+收信时间，记录在 `receive.seen-file`
+  （默认 `./data/mail-seen.txt`，保留最近 500 条）——进程重启也不会把未读邮件重复通知一遍；
+- **`mark-as-read`**：通知后把邮件标记已读（IMAP 支持）。**POP3 不支持打标记**，
+  代码会自动降级为只靠 seen-file 去重（首次踩到会打一条 INFO 日志），这也是推荐用 IMAP 的原因；
+- **`delete-after-fetch`**：通知后删除邮件，POP3 上等于把邮件从服务器移走，默认关闭，慎开；
+- **积压保护**：`max-per-poll`（默认 10）限制单轮最多通知几封，防止一个塞满的邮箱一次刷出上百条私聊；
+- **发信**：`MailService` 按 `platform.mail.smtp.*` 自行构建 `JavaMailSenderImpl`，
+  不用 Spring Boot 的 `spring.mail.*`（避免两处都能配、改错一个不生效）；
+  `password` 填的是邮箱的 **SMTP/IMAP 授权码**，不是登录密码；
+- 管理员可在私聊里用 `/mail/send 收件人 | 主题 | 正文` 直接验证发信是否通。
+
+**账号设置里的绑定邮箱**：邮箱是**选填**的（登录凭证是手机号），注册时留空也能过；
+之后在「我的 → 账号设置 → 绑定邮箱」里随时补上或改绑（需密码确认），未绑定时该行显示
+「未绑定邮箱，建议绑定邮箱」。改绑走 `PUT /api/users/me/email`，传空字符串表示解绑。
+
+**邮箱验证（激活链接）**：注册/换绑后邮箱处于「未验证」状态，在「我的」页点它会发一封
+带激活链接的邮件，点开链接即完成验证（后端返回一张结果页，任何设备都能点）。
+没填 `platform.mail.smtp.*` 时会弹「后端未填写发信服务器（SMTP），无法发信」。
+**只有已验证的邮箱才能用来找回密码**——否则谁都能把别人的邮箱绑到自己的账号上劫持找回流程。
+激活链接前缀用 `platform.auth.email-verify.base-url` 配置（留空按请求 host 推导，仅限本机调试）。
+
+**忘记密码**：登录页「忘记密码？」→ 输入注册手机号或邮箱（带图形验证码防枚举）→
+按账号实际情况给验证方式 →「验证码 / 临时密码 / 动态密码」三者任一 + 新密码提交即改密。
+- **邮箱验证码 / 一次性临时密码**：发到**已验证**邮箱；未绑定 / 未验证会明确提示「无法找到邮箱：…」。
+- **动态密码（认证器）**：用「我的 → 动态密码」里绑过的 TOTP / HOTP，**不发信**——
+  邮箱没绑、没验证、收不到信时的兜底通道。因为 6 位码空间小，这条路的失败次数单独计数并锁定
+  （`platform.auth.reset.otp-max-attempts` / `otp-lock-minutes`，`allow-otp: false` 可整条关掉），
+  输错时提示里会带上"还可以试几次"。
+
+参数在 `platform.auth.reset.*`（验证码算法 numeric/upper/alphanumeric/hex、长度、有效期、限次、发送节流）。
+
+**动态密码（绑定到账号的 OTP）**：「我的 → 动态密码」里生成 → 用认证器扫码或复制
+`otpauth://` 链接一键导入 → **必须立刻输一个动态码验证一次**才算绑定生效（避免用户抄错密钥
+把自己锁在门外）。可选 **TOTP（时间型）/ HOTP（计数器型）**、**SHA1 / SHA256 / SHA512**、
+**6 / 8 位**、**30 / 60 秒**步长，参数在 `platform.auth.otp.*`（`window` 是时间容差，
+调大等于给暴力枚举放水）。绑定生效后既能用来**找回密码**，也是后续登录二次验证的基础。
+密钥只存服务端（`users.otp_secret`），生成后页面上只展示这一次。
+
+**OTP 密码管理器（工具箱）**：本地动态验证码，支持 **TOTP（时间型）/ HOTP（计数器型）**、
+**SHA1 / SHA256 / SHA512** 三种摘要算法、**6 / 8 位**码长、**30 / 60 秒**步长；
+扫码添加会原样读取 `otpauth://` URI 里的全部参数，手动添加时也可自行选择，还能粘贴
+`otpauth://` 链接一键导入。**密钥只存本机**，与上面的账号绑定互不相干。
 
 ### 主要接口
 
@@ -138,7 +254,7 @@ cd backend
 | 方法 | 路径 | 说明 | 鉴权 |
 |---|---|---|---|
 | GET | `/api/auth/captcha` | 获取图形验证码 | 公开 |
-| POST | `/api/auth/register` | 注册（username+password+**phone**+**email**+验证码） | 公开 |
+| POST | `/api/auth/register` | 注册（username+password+**phone 必填**+email **选填**+验证码） | 公开 |
 | POST | `/api/auth/login/phone` | **手机号登录**（主入口，需验证码） | 公开 |
 | POST | `/api/auth/login` | 用户名登录（旧入口，后端保留） | 公开 |
 | POST | `/api/auth/refresh` | 刷新 access token | refresh token |
@@ -191,13 +307,35 @@ cd backend
 **用户 / VIP**
 | 方法 | 路径 | 说明 | 鉴权 |
 |---|---|---|---|
-| GET | `/api/users/me` | 当前用户（含 vip/role/phone） | JWT |
+| GET | `/api/users/me` | 当前用户（含 vip/role/phone/email） | JWT |
 | GET | `/api/users/{id}/profile` | 用户资料卡（评论/动态弹窗用） | 公开 |
 | POST | `/api/users/me/vip` | 开通/续费 VIP（模拟支付，+1 个月） | JWT |
-| GET | `/api/users` | 用户列表 | ADMIN |
-| POST | `/api/users/{id}/vip?months=n` | 赠送 VIP | ADMIN |
-| DELETE | `/api/users/{id}/vip` | 收回 VIP | ADMIN |
-| DELETE | `/api/users/{id}` | 删除用户 | ADMIN |
+| PUT | `/api/users/me/password` | 修改密码（校验旧密码） | JWT |
+| PUT | `/api/users/me/username` | 修改用户名（换发新令牌） | JWT |
+| PUT | `/api/users/me/phone` | 换绑手机号（密码确认） | JWT |
+| PUT | `/api/users/me/email` | **绑定/换绑邮箱**（密码确认；`email:""` = 解绑） | JWT |
+| POST | `/api/users/me/email/verification` | 给已绑定邮箱发激活邮件（点链接完成验证） | JWT |
+| GET | `/api/users/me/otp` | 查询动态密码绑定状态 | JWT |
+| POST | `/api/users/me/otp/setup` | 生成待验证的动态密码配置（返回 secret / otpauth 链接） | JWT |
+| POST | `/api/users/me/otp/verify` | 输入一次动态码完成绑定 | JWT |
+| DELETE | `/api/users/me/otp` | 解绑动态密码（密码确认） | JWT |
+| GET | `/api/auth/email/verify?token=` | 邮箱激活链接落点（返回结果页） | 公开 |
+| POST | `/api/auth/password/forgot/lookup` | 忘记密码①：手机号/邮箱定位账号（需验证码，回带 otpBound） | 公开 |
+| GET | `/api/auth/password/forgot/methods` | 忘记密码：三种验证方式的形态说明 | 公开 |
+| POST | `/api/auth/password/forgot/send` | 忘记密码②：发验证码 / 临时密码到已验证邮箱（动态密码只回形态，不发信） | 公开 |
+| POST | `/api/auth/password/forgot/reset` | 忘记密码③：凭据（验证码 / 临时密码 / 动态码）+ 新密码改密 | 公开 |
+| POST / DELETE | `/api/users/me/avatar` | 上传 / 恢复默认头像 | JWT |
+| POST | `/api/users/me/deactivate` | 注销账号（软删除，密码确认） | JWT |
+| GET | `/api/users` | 用户列表 | ADMIN / MODERATOR |
+| POST | `/api/users/{id}/ban` `/unban` | 封禁 / 解封 | ADMIN / MODERATOR |
+| POST | `/api/users/{id}/moderator` | 提权为「管理用户」 | ADMIN |
+| DELETE | `/api/users/{id}/moderator` | 撤销「管理用户」 | ADMIN |
+| POST | `/api/users/{id}/vip?months=n` | 赠送 VIP | ADMIN / MODERATOR |
+| DELETE | `/api/users/{id}/vip` | 收回 VIP | ADMIN / MODERATOR |
+| DELETE | `/api/users/{id}` | 删除用户 | ADMIN / MODERATOR |
+
+> 越权判定统一在 `RoleService`：ADMIN 能管 MODERATOR/USER，MODERATOR 只能管 USER（含 VIP），
+> 两者都不能碰 ADMIN / MODERATOR / SYSTEM（Angela）；系统账号不可封禁、不可删除、不可改名。
 
 ---
 
